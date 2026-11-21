@@ -3,13 +3,15 @@
 
 One JVM per (experiment, dataset, learner, seed) cell. The learner and evaluator strings and the
 JVM options come verbatim from the authors' JSON config at the pinned commit; only the maximum heap
-(-Xmx) is replaced, and it is recorded per cell. Cells run longest first, at most --jobs at a time,
-and, with --ram-budget, only while the heaps of the running cells fit in that budget. Finished cells
-are skipped on rerun when the command is unchanged, so an interrupted run can simply be restarted.
+(-Xmx) is replaced, and it is recorded per cell. Cells of all requested experiments share one queue:
+longest first, at most --jobs at a time and, with --ram-budget, only while the heaps of the running
+cells fit in that budget. With --retry-oom, cells that run out of memory are run again with that
+heap. Finished cells are skipped on rerun, so an interrupted run can simply be restarted.
 
 Usage (Linux, after exp/toolchain.py):
-  python3 exp/run_matrix.py --exp E1 --plan repro --jobs 16 --ram-budget 150g \\
-      --xmx "default=6g,NZEnergy:SGBT(SRP(FIRTDD))=26g,NZEnergy:SRP(SGBT(FIRTDD))=26g" --exit-on-oom
+  python3 exp/run_matrix.py --exp E1 E2 E4 E5 --plan repro --jobs 16 --ram-budget 150g \\
+      --xmx "default=6g,NZEnergy:SGBT(SRP(FIRTDD))=26g,NZEnergy:SRP(SGBT(FIRTDD))=26g" \\
+      --exit-on-oom --retry-oom 12g
 """
 
 import argparse
@@ -46,6 +48,9 @@ CORE10 = ["fried", "House8L", "abalone", "bike", "elevators", "MetroTraffic", "a
 R2 = "adjusted coefficient of determination"
 WALL = "evaluation time (wall) (seconds)"
 CLASSIFIED = "classified instances"
+# Instances processed so far. "classified instances" is the window size under the windowed
+# evaluator of E2, so completion is checked on this column when it is present.
+SEEN = "learning evaluation instances"
 JAVA_OPTION_VARIABLES = {"JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS"}
 OOM_PATTERN = re.compile(rb"OutOfMemoryError|Native memory allocation.*failed|There is insufficient memory",
                          re.IGNORECASE)
@@ -90,6 +95,16 @@ def cell_xmx(mapping, dataset, method):
     return mapping.get(f"{dataset}:{method}", mapping.get(dataset, mapping["default"]))
 
 
+def heap_for(args, cell):
+    """Heap of one cell: the --retry-oom size after an OOM, otherwise from the --xmx map."""
+    return args.heap_override.get(cell) or cell_xmx(args.xmx, cell[1], cell[2])
+
+
+def cell_folder(results, cell):
+    exp, dataset, method, _, _, seed = cell
+    return results / "raw" / exp / dataset / method / f"seed={'none' if seed is None else seed}"
+
+
 def reserve_bytes(xmx):
     return int(heap_bytes(xmx) * RSS_FACTOR) + RSS_EXTRA
 
@@ -115,9 +130,11 @@ def run_identity(command):
     """The part of a command that defines the run: JVM options and the MOA task.
 
     The java and jar paths are left out, and so is the jar digest (recorded per cell): Maven builds of
-    the same pinned source are not byte-reproducible. The OOM flag is operational and left out too.
+    the same pinned source are not byte-reproducible. The heap size and the OOM flag only decide
+    whether a run fits in memory, not its result, so they are left out too (the heap is recorded).
     """
-    return [part for part in command[3:] if part != "-XX:+ExitOnOutOfMemoryError"]
+    return [part for part in command[3:]
+            if part != "-XX:+ExitOnOutOfMemoryError" and not part.startswith("-Xmx")]
 
 
 def final_row(csv_path):
@@ -201,9 +218,9 @@ class DataCache:
 def run_cell(cell, args, config, config_hash, data, jar_sha):
     exp, dataset, method, seed_flag, learner, seed = cell
     seed_label = "none" if seed is None else str(seed)
-    folder = args.results / "raw" / exp / dataset / method / f"seed={seed_label}"
+    folder = cell_folder(args.results, cell)
     record_path = folder / "record.json"
-    xmx = cell_xmx(args.xmx, dataset, method)
+    xmx = heap_for(args, cell)
     command, paper_xmx = build_command(config, learner, seed_flag, seed, args.java, args.jar, xmx,
                                        args.exit_on_oom)
     stream, evidence = data.get(dataset)
@@ -246,7 +263,7 @@ def run_cell(cell, args, config, config_hash, data, jar_sha):
     processed = None
     if row is not None:
         try:
-            processed = int(float(row[CLASSIFIED]))
+            processed = int(float(row[SEEN] if SEEN in row else row[CLASSIFIED]))
         except (KeyError, ValueError):
             processed = None
     oom = java_oom(folder)
@@ -278,9 +295,14 @@ def run_cell(cell, args, config, config_hash, data, jar_sha):
 
 
 def estimated_seconds(method, dataset):
-    """Paper Tab. 4 mean wall time for one run on the authors' machine; 60 s if not tabulated."""
+    """Paper Tab. 4 mean wall time for one run on the authors' machine; 60 s if not tabulated.
+
+    The E4/E5 grid variants (SGBT_<...>(Oza_<...>)) are estimated by Sgb(Oza) on the same dataset.
+    """
     from summarize_e1 import DATASETS, METHODS, TAB4
     names = {label: paper for paper, label, _ in METHODS}
+    if method.startswith("SGBT_"):
+        method = "SGBT(Oza(FIRTDD))"
     if method in names and dataset in DATASETS:
         return TAB4[names[method]][DATASETS.index(dataset)]
     return 60.0
@@ -290,27 +312,29 @@ def schedule(cells, args, run):
     """Run cells in order, at most args.jobs at once and within args.ram_budget bytes of reserved heap.
 
     When memory frees up, the first waiting cell that fits starts, so long cells keep priority and
-    small cells fill the gaps.
+    small cells fill the gaps. Returns the status counts and the cells that ran out of memory.
     """
-    need = {cell: reserve_bytes(cell_xmx(args.xmx, cell[1], cell[2])) for cell in cells}
-    pending, running, counts = list(cells), {}, {}
+    need = {cell: reserve_bytes(heap_for(args, cell)) for cell in cells}
+    pending, running, counts, oom = list(cells), {}, {}, []
     with futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
         while pending or running:
-            used = sum(running.values())
+            used = sum(size for _, size in running.values())
             while len(running) < args.jobs:
                 pick = next((c for c in pending if used + need[c] <= args.ram_budget), None)
                 if pick is None:
                     break
                 pending.remove(pick)
-                running[pool.submit(run, pick)] = need[pick]
+                running[pool.submit(run, pick)] = (pick, need[pick])
                 used += need[pick]
             done, _ = futures.wait(running, return_when=futures.FIRST_COMPLETED)
             for job in done:
-                running.pop(job)
+                cell, _ = running.pop(job)
                 record, skipped = job.result()
                 key = "skipped" if skipped else record["status"]
                 counts[key] = counts.get(key, 0) + 1
-    return counts
+                if key == "oom":
+                    oom.append(cell)
+    return counts, oom
 
 
 def size_arg(text):
@@ -326,9 +350,10 @@ def main(argv=None):
     parser.add_argument("--jar", type=Path)
     parser.add_argument("--results", type=Path, default=Path("results"))
     parser.add_argument("--data-cache", type=Path, help="Default: data/ next to the toolchain file")
-    parser.add_argument("--exp", choices=sorted(CONFIGS), default="E1")
+    parser.add_argument("--exp", nargs="+", choices=sorted(CONFIGS), default=["E1"],
+                        help="One or more experiments; their cells share one queue")
     parser.add_argument("--plan", choices=["repro"],
-                        help="repro: the 13 datasets shipped in the authors' repo, AXGBr only on the 10 smaller ones")
+                        help="repro: only datasets shipped in the authors' repo, AXGBr only on the 10 smaller ones")
     parser.add_argument("--datasets", nargs="+")
     parser.add_argument("--methods", nargs="+")
     parser.add_argument("--exclude-methods", nargs="+", default=[])
@@ -341,6 +366,8 @@ def main(argv=None):
                         help="Heap per cell: default=<size>[,<dataset>=<size>][,<dataset>:<method>=<size>]")
     parser.add_argument("--exit-on-oom", action="store_true",
                         help="Add -XX:+ExitOnOutOfMemoryError so an OOM ends the run immediately")
+    parser.add_argument("--retry-oom", metavar="SIZE",
+                        help="Run cells that ran out of memory (now or in an earlier run) again with this heap")
     parser.add_argument("--list", action="store_true", help="Print the cells and exit without running")
     args = parser.parse_args(argv)
 
@@ -353,38 +380,52 @@ def main(argv=None):
         parser.error("Run exp/toolchain.py first, or pass --upstream, --java and --jar")
     args.data_cache = args.data_cache or args.toolchain.parent / "data"
 
-    config, config_hash = load_config(args.upstream, args.exp)
-    shipped = [d for d in config["datasets"] if not d.startswith("SUP")]  # SUP* ARFFs are not in the repo
-    datasets = args.datasets or (shipped if args.plan else config["datasets"])
-    unknown = set(datasets) - set(config["datasets"])
-    if unknown:
-        parser.error(f"Datasets not in {CONFIGS[args.exp]}: {sorted(unknown)}")
-    learners = [entry for entry in config["learners"] if entry[0] not in args.exclude_methods]
-    if args.methods:
-        missing = set(args.methods) - {entry[0] for entry in learners}
-        if missing:
-            parser.error(f"Methods not in config: {sorted(missing)}")
-        learners = [entry for entry in learners if entry[0] in args.methods]
-    seeds = args.seeds or config["random_seeds"]
+    configs, cells = {}, []
+    for exp in args.exp:
+        config, config_hash = configs[exp] = load_config(args.upstream, exp)
+        shipped = [d for d in config["datasets"] if not d.startswith("SUP")]  # SUP* ARFFs are not in the repo
+        if args.datasets:
+            datasets = [d for d in args.datasets if d in config["datasets"]]
+        else:
+            datasets = shipped if args.plan else config["datasets"]
+        learners = [entry for entry in config["learners"] if entry[0] not in args.exclude_methods]
+        if args.methods:
+            learners = [entry for entry in learners if entry[0] in args.methods]
+        seeds = args.seeds or config["random_seeds"]
+        for dataset in datasets:
+            for name, seed_flag, learner in learners:
+                if args.plan == "repro" and name == "AXGBr" and dataset not in CORE10:
+                    continue
+                # Learners without a seed option are deterministic and run once per dataset.
+                for seed in (seeds if seed_flag else [None]):
+                    cells.append((exp, dataset, name, seed_flag, learner, seed))
+    every = {d for c, _ in configs.values() for d in c["datasets"]}
+    every_method = {entry[0] for c, _ in configs.values() for entry in c["learners"]}
+    if set(args.datasets or []) - every:
+        parser.error(f"Datasets not in any selected config: {sorted(set(args.datasets) - every)}")
+    if set(args.methods or []) - every_method:
+        parser.error(f"Methods not in any selected config: {sorted(set(args.methods) - every_method)}")
 
-    cells = []
-    for dataset in datasets:
-        for name, seed_flag, learner in learners:
-            if args.plan == "repro" and name == "AXGBr" and dataset not in CORE10:
-                continue
-            # Learners without a seed option are deterministic and run once per dataset.
-            for seed in (seeds if seed_flag else [None]):
-                cells.append((args.exp, dataset, name, seed_flag, learner, seed))
-    cells.sort(key=lambda c: (-estimated_seconds(c[2], c[1]), c[1], c[2], c[5] or 0))  # longest first
-    too_big = [c for c in cells if reserve_bytes(cell_xmx(args.xmx, c[1], c[2])) > args.ram_budget]
+    # Cells that already ran out of memory start directly with the --retry-oom heap.
+    args.heap_override = {}
+    if args.retry_oom:
+        for cell in cells:
+            record = cell_folder(args.results, cell) / "record.json"
+            if record.is_file() and json.loads(record.read_text()).get("status") == "oom":
+                args.heap_override[cell] = args.retry_oom
+    cells.sort(key=lambda c: (-estimated_seconds(c[2], c[1]), c[0], c[1], c[2], c[5] or 0))  # longest first
+    if args.retry_oom and reserve_bytes(args.retry_oom) > args.ram_budget:
+        parser.error(f"--retry-oom {args.retry_oom} does not fit in --ram-budget")
+    too_big = [c for c in cells if reserve_bytes(heap_for(args, c)) > args.ram_budget]
     if too_big:
         parser.error(f"{len(too_big)} cells need more than --ram-budget, e.g. {too_big[0][1]} {too_big[0][2]}")
     total = sum(estimated_seconds(c[2], c[1]) for c in cells) / 3600
-    log(f"{len(cells)} cells, ≈{total:.1f} CPU-h at the paper's speed, {args.jobs} parallel JVMs, "
-        f"RAM budget {args.ram_budget / 2**30:.0f} GiB, heap map {args.xmx}")
+    log(f"{len(cells)} cells ({', '.join(args.exp)}), ≈{total:.1f} CPU-h at the paper's speed, {args.jobs} "
+        f"parallel JVMs, RAM budget {args.ram_budget / 2**30:.0f} GiB, heap map {args.xmx}"
+        + (f", OOM retry at -Xmx{args.retry_oom}" if args.retry_oom else ""))
     if args.list:
         for c in cells:
-            print(f"{c[1]:14s} {c[2]:22s} seed={c[5]}  -Xmx{cell_xmx(args.xmx, c[1], c[2])}  "
+            print(f"{c[0]} {c[1]:14s} {c[2]:24s} seed={c[5]}  -Xmx{heap_for(args, c)}  "
                   f"≈{estimated_seconds(c[2], c[1]):.0f} s")
         return 0
 
@@ -392,7 +433,21 @@ def main(argv=None):
         args.cpu_model = next((line.split(":", 1)[1].strip() for line in info if line.startswith("model name")), None)
     jar_sha = hashlib.sha256(args.jar.read_bytes()).hexdigest()
     data = DataCache(args.upstream, args.data_cache)
-    counts = schedule(cells, args, lambda cell: run_cell(cell, args, config, config_hash, data, jar_sha))
+
+    def run(cell):
+        return run_cell(cell, args, *configs[cell[0]], data, jar_sha)
+
+    counts, oom = schedule(cells, args, run)
+    retry = [c for c in oom if args.retry_oom and heap_bytes(args.retry_oom) > heap_bytes(heap_for(args, c))]
+    if retry:
+        log(f"{len(retry)} cells ran out of memory; running them again with -Xmx{args.retry_oom}")
+        for cell in retry:
+            args.heap_override[cell] = args.retry_oom
+        counts["oom"] -= len(retry)
+        more, _ = schedule(retry, args, run)
+        for key, value in more.items():
+            counts[key] = counts.get(key, 0) + value
+    counts = {k: v for k, v in counts.items() if v}
     log(f"done: {counts}")
     return 0 if set(counts) <= {"completed", "skipped"} else 1
 
