@@ -1,0 +1,2 @@
+exp,dataset,method_key,seed,r2,r2_ref,delta,ref_source,wall,wall_ref,sigma,verdict,status,classified_instances,classified_instances_ref,peak_rss_bytes,cpu_model,concurrency,wall_ref_source,observed_source,status_reason,table3_r2_ref,table3_source,table3_rounded_match
+B1-d,NZEnergy,SGBT(ARFReg(FIRTDD)),1,0.9741708731300197,0.9741708731300197,0E-16,exp/post_hoc_new/NZEnergy_1/SGBT(ARF).csv,6254.94091796875,7408.0869140625,0.8443395697876094,Exact,completed,3100666,3100666,2280615936,AMD EPYC 7B12,1,exp/post_hoc_new/NZEnergy_1/SGBT(ARF).csv,,,,,

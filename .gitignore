@@ -1,0 +1,6 @@
+__pycache__/
+*.py[cod]
+
+# Raw runs are large (one java.log and evaluation.csv per cell); keep them out of git.
+results/raw/
+results/*.zip
