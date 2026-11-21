@@ -16,10 +16,12 @@ exp/
   run_matrix.py    runs one JVM per (experiment, dataset, method, seed) cell, resumable
   summarize_e1.py  E1 results table vs paper Tab. 3 / Tab. 4 and vs the authors' exp/post_hoc_new
   plot_e1.py       E1 figures (PNG): paper Figs. 4-5 (Shaffer post-hoc test) and comparisons with the paper
+  run_e3.py        E3 bias-variance decomposition (paper Sec. 4.2), resumable, compared with the authors' curves
+  plot_e3.py       E3 figures (PNG): paper Figs. 2, 7, 8
 results/
-  raw/             one folder per cell: record.json, evaluation.csv, java.log (not committed)
+  raw/             one folder per cell or task (not committed)
   summary/         summary tables
-  figures/         figures from plot_e1.py
+  figures/         figures from plot_e1.py and plot_e3.py
 ```
 
 ## Requirements
@@ -95,6 +97,43 @@ authors' own per-seed results (16 datasets × 5 seeds). It gives the average ran
 non-significant pairs as the paper's figures. Our own runs cover 13 datasets (65 blocks), so their
 ranks can differ slightly from the paper's even when every run matches.
 
+## E3: bias-variance decomposition (paper Figs. 2, 7, 8)
+
+E3 does not use `moa.DoTask`. The authors' script (`exp/Bias_Variance_Decomp/BVDecompSyntheticLatest.py`)
+wraps MOA learners for scikit-learn with CapyMOA and runs `mlxtend.evaluate.bias_variance_decomp`.
+`exp/run_e3.py` follows that protocol with the same MOA jar, driven through JPype:
+
+- Methods (labels of the authors' result files): `B` = Sgbt, `BB` = Sgb(Oza) with 5 bagged trees per
+  step, `BagB` = Oza(Sgbt) with 5 bagged SGBT models; boosting iterations 5, 10, ..., 100.
+- Each dataset is split by `KFold(n_splits=10)` without shuffling. In each fold, 10 models are trained
+  on bootstrap samples of the training fold (`num_rounds=10, random_seed=42`) and predict the test fold.
+- Bias and variance are averaged over the 10 folds; their square roots are reported.
+
+```bash
+apt-get install -y python3-venv
+python3 -m venv ~/sgbr/venv
+~/sgbr/venv/bin/pip install numpy scipy scikit-learn mlxtend JPype1 matplotlib
+
+~/sgbr/venv/bin/python exp/run_e3.py --jobs 16 --xmx 4g 2>&1 | tee e3.log   # resumable
+~/sgbr/venv/bin/python exp/plot_e3.py --with-authors   # grey lines = the authors' curves
+```
+
+Outputs: `results/summary/E3_bias_variance.csv` (same columns as the authors' files),
+`results/summary/E3_parity.csv` (difference from the authors' value at every point), and
+`results/figures/fig2_*.png`, `fig7_*.png`, `fig8_*.png`.
+
+Scope and cost:
+
+- Only the 7 datasets without drift can be rerun: House8L, MetroTraffic, abalone, ailerons, bike,
+  elevators, fried. The 3 drifting Friedman datasets need split files (`<name>_1` ... `<name>_10`
+  for training, `<name>_12` for testing) that are not in the authors' repository. If you have them,
+  pass `--split-dir`. Otherwise `plot_e3.py --source authors` draws the authors' own curves.
+- 4,200 tasks (7 datasets × 3 methods × 20 iteration counts × 10 folds), each training 10 models.
+  A rough estimate from abalone timings is 100–250 CPU-hours, or about 6–16 hours on 16 vCPUs. The
+  authors ran E3 on a 64-core machine.
+- Check: on abalone, all three methods at 5 and 10 iterations match the authors' committed values to
+  within 2e-15 (floating-point summation order).
+
 ## Differences from the authors' setup
 
 | Item | Authors (exp/exp_config.json) | Here |
@@ -104,6 +143,8 @@ ranks can differ slightly from the paper's even when every run matches.
 | AXGBr | All datasets | 10 smaller datasets (`--plan repro`); NZEnergy alone takes about 1.3e5 s in Tab. 4 |
 | JVM flags | as configured | optional `-XX:+ExitOnOutOfMemoryError` (`--exit-on-oom`) so an OOM stops at once |
 | Java | not specified in the config | Temurin JDK 11.0.29 (MEKA 1.9.7 in the MOA fork needs Java 11) |
+| E3 wrapper | CapyMOA with its `moa.jar` replaced by theirs | JPype calling the same jar directly, same steps; results match theirs |
+| E3 datasets | 10, including 3 drifting Friedman sets from split files | 7; the split files are not in their repository |
 
 The learner strings, evaluator, seeds and the remaining JVM options are unchanged.
 
