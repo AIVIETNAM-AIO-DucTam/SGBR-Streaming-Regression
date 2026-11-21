@@ -33,6 +33,7 @@ exp/
   plot_e3.py       E3 figures (paper Figs. 2, 7, 8)
   plot_e4_e5.py    E4/E5 tables and figures (paper Fig. 9, Tabs. 5-6)
 requirements.txt   Python packages for E3 and the figures
+extra_data/        datasets not in the authors' repository, added when available (see below)
 results/
   raw/             one folder per run or task (not committed)
   summary/         tables (CSV and Markdown)
@@ -105,6 +106,22 @@ to end yet):
 | E1 + E2 + E4 + E5 (`moa`) | about 168 | about 15-20 h; the longest single run (NZEnergy SGBT(SRP)) alone takes 6-10 h |
 | E3 (`e3`) | about 100-250 (from abalone timings) | about 6-16 h |
 
+### Adding the missing datasets later
+
+Six datasets used in the paper are not in the authors' repository: SUP2I, SUP3A, SUP3G (E1) and the
+scaled-down split files of FriedmanLea, FriedmanGra, FriedmanGsg (E3). Everything else runs
+without them. If you obtain them (for example from the authors), copy them into `extra_data/` on the
+machine (file names in `extra_data/README.md`) and run
+
+```bash
+bash exp/run_all.sh moa e3 figures pack
+```
+
+Only the runs that use the new files are added; everything finished is skipped. Until then, the
+E1 tables and figures cover the 13 shipped datasets, and Fig. 7 shows the three Friedman panels
+from the authors' committed results on a shaded background labelled "authors' results, not
+reproduced".
+
 Each script can also be run on its own; `--help` lists its options. For example, `python3
 exp/run_matrix.py --exp E5 --datasets abalone --seeds 1 --jobs 4` runs one small slice, and
 `--list` prints the runs without starting them.
@@ -118,7 +135,7 @@ exp/run_matrix.py --exp E5 --datasets abalone --seeds 1 --jobs 4` runs one small
 | `figures/r2_vs_paper.png`, `r2_delta_heatmap.png`, `avg_rank_vs_paper.png`, `walltime_ratio.png` | E1 compared with paper Tabs. 3-4 |
 | `summary/E2_over_time.csv`, `E2_drift.md`, `figures/fig6_over_time.png` | Like paper Fig. 6: windowed R̄² and wall time over hyperA, and R̄² before and after each drift |
 | `summary/E3_bias_variance.csv`, `E3_parity.csv` | E3 curves, and their difference from the authors' committed values at every point |
-| `figures/fig2_*.png`, `fig7_*.png`, `fig8_*.png` | Like paper Figs. 2, 7, 8; grey lines are the authors' curves. `*_authors.png` are drawn from the authors' committed results only |
+| `figures/fig2_*.png`, `fig7_*.png`, `fig8_*.png` | Like paper Figs. 2, 7, 8; grey lines are the authors' curves. In Fig. 7, Friedman panels without runs of ours are shaded and drawn from the authors' results. `*_authors.png` are drawn from the authors' committed results only |
 | `summary/E4_table.md`, `E4_grid.csv`, `figures/fig9_lr_feature.png` | Like paper Fig. 9: average R̄² and wall time per (learning rate, feature %) |
 | `summary/E5_table.md`, `E5_grid.csv`, `figures/fig10_steps_bagsize.png` | Like paper Tabs. 5-6 and Fig. 10: R̄² and wall time per (boosting steps, bag size), with avg and avgRank |
 
@@ -159,11 +176,13 @@ follows the same protocol with the same MOA jar, driven through JPype:
 - Each dataset is split by `KFold(n_splits=10)` without shuffling. In each fold, 10 models are
   trained on bootstrap samples of the training fold (`num_rounds=10, random_seed=42`) and predict
   the test fold. Bias and variance are averaged over the 10 folds, and their square roots reported.
-- Only the 7 datasets without drift can be rerun: House8L, MetroTraffic, abalone, ailerons, bike,
-  elevators, fried. The 3 drifting Friedman datasets need split files (`<name>_1` ... `<name>_10`
-  for training, `<name>_12` for testing) that are not in the authors' repository; with them, pass
-  `--split-dir` to `run_e3.py`. Their panels in Fig. 7 are available from the authors' curves
-  (`plot_e3.py --source authors`).
+- The 7 datasets without drift are rerun: House8L, MetroTraffic, abalone, ailerons, bike,
+  elevators, fried. The 3 drifting Friedman datasets need 11 scaled-down split files each
+  (`<name>_1` ... `<name>_10` for training, `<name>_12` for testing) that are not in the authors'
+  repository; `run_e3.py` adds each one whose files are in `extra_data/`. The full 100,000-instance
+  Friedman files can be regenerated exactly with River (their ARFF headers give the call), but the
+  paper does not give the settings of the scaled-down files, and five plausible guesses did not
+  reproduce the authors' values, so they are not generated here.
 - Check: on abalone, all three methods at 5 and 10 iterations match the authors' committed values
   to within 2e-15 (floating-point summation order).
 
@@ -172,12 +191,12 @@ follows the same protocol with the same MOA jar, driven through JPype:
 | Item | Authors | Here |
 |---|---|---|
 | Maximum heap | `-Xmx48g` (E1) or `-Xmx12g` (E2, E4, E5) for every run | Per run (`MOA_XMX`, recorded in each `record.json`); runs that run out of memory are retried with `RETRY_XMX`. The heap does not change results |
-| Datasets (E1) | 16, including SUP2I, SUP3A, SUP3G | 13. The SUP\* ARFF files are not in the authors' repository |
+| Datasets (E1) | 16, including SUP2I, SUP3A, SUP3G | 13. The SUP\* ARFF files are not in the authors' repository; each one put in `extra_data/` is added |
 | AXGBr (E1) | All datasets | 10 smaller datasets; NZEnergy alone takes about 1.3e5 s in Tab. 4 |
 | JVM flags | as configured | plus `-XX:+ExitOnOutOfMemoryError` so an out-of-memory run stops at once |
 | Java | not specified in the config | Temurin JDK 11.0.29 (MEKA 1.9.7 in the MOA fork needs Java 11) |
 | E3 wrapper | CapyMOA with its `moa.jar` replaced by theirs | JPype calling the same jar directly, same steps; results match theirs |
-| E3 datasets | 10, including 3 drifting Friedman sets from split files | 7; the split files are not in their repository |
+| E3 datasets | 10, including 3 drifting Friedman sets from split files | 7; the split files are not in their repository (added from `extra_data/` when supplied; until then Fig. 7 shows the authors' results for them, marked) |
 
 The learner strings, evaluators, seeds and the remaining JVM options are unchanged.
 

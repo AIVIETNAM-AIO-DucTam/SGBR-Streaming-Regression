@@ -4,3 +4,7 @@ __pycache__/
 # Raw runs are large (one java.log and evaluation.csv per cell); keep them out of git.
 results/raw/
 results/*.zip
+
+# Datasets supplied outside the authors' repository (see extra_data/README.md); not committed.
+extra_data/*
+!extra_data/README.md

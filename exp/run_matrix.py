@@ -193,14 +193,28 @@ def dataset_evidence(path):
     return {"sha256": digest.hexdigest(), "expected_instances": count}
 
 
-class DataCache:
-    """Materialise each pinned ARFF once and remember its digest and row count."""
+def extra_arff(extra, dataset):
+    """<extra>/<dataset>.arff, a dataset supplied outside the authors' repository (e.g. SUP2I), or None."""
+    path = extra / f"{dataset}.arff" if extra else None
+    return path.resolve() if path and path.is_file() else None
 
-    def __init__(self, upstream, root):
-        self.upstream, self.root, self.lock, self.items = upstream, root, threading.Lock(), {}
+
+class DataCache:
+    """Materialise each pinned ARFF once and remember its digest and row count.
+
+    A file <extra>/<dataset>.arff, when present, is used instead (it is how datasets missing from the
+    authors' repository, such as SUP2I, SUP3A, SUP3G, are added later). Its digest is recorded per run.
+    """
+
+    def __init__(self, upstream, root, extra=None):
+        self.upstream, self.root, self.extra = upstream, root, extra
+        self.lock, self.items = threading.Lock(), {}
 
     def get(self, dataset):
         with self.lock:
+            supplied = extra_arff(self.extra, dataset)
+            if supplied and dataset not in self.items:
+                self.items[dataset] = (supplied, dict(dataset_evidence(supplied), source=str(supplied)))
             if dataset not in self.items:
                 folder = self.root / dataset
                 folder.mkdir(parents=True, exist_ok=True)
@@ -350,10 +364,14 @@ def main(argv=None):
     parser.add_argument("--jar", type=Path)
     parser.add_argument("--results", type=Path, default=Path("results"))
     parser.add_argument("--data-cache", type=Path, help="Default: data/ next to the toolchain file")
+    parser.add_argument("--extra-data", type=Path, default=Path("extra_data"),
+                        help="Folder for datasets not in the authors' repository (<dataset>.arff, e.g. SUP2I.arff); "
+                             "with --plan repro, those present are run")
     parser.add_argument("--exp", nargs="+", choices=sorted(CONFIGS), default=["E1"],
                         help="One or more experiments; their cells share one queue")
     parser.add_argument("--plan", choices=["repro"],
-                        help="repro: only datasets shipped in the authors' repo, AXGBr only on the 10 smaller ones")
+                        help="repro: datasets shipped in the authors' repo plus any in --extra-data, "
+                             "AXGBr only on the 10 smaller ones")
     parser.add_argument("--datasets", nargs="+")
     parser.add_argument("--methods", nargs="+")
     parser.add_argument("--exclude-methods", nargs="+", default=[])
@@ -383,7 +401,8 @@ def main(argv=None):
     configs, cells = {}, []
     for exp in args.exp:
         config, config_hash = configs[exp] = load_config(args.upstream, exp)
-        shipped = [d for d in config["datasets"] if not d.startswith("SUP")]  # SUP* ARFFs are not in the repo
+        # SUP* ARFFs are not in the authors' repo; they run once supplied in --extra-data.
+        shipped = [d for d in config["datasets"] if not d.startswith("SUP") or extra_arff(args.extra_data, d)]
         if args.datasets:
             datasets = [d for d in args.datasets if d in config["datasets"]]
         else:
@@ -399,6 +418,11 @@ def main(argv=None):
                 # Learners without a seed option are deterministic and run once per dataset.
                 for seed in (seeds if seed_flag else [None]):
                     cells.append((exp, dataset, name, seed_flag, learner, seed))
+    unsupplied = sorted({d for c, _ in configs.values() for d in c["datasets"]
+                         if d.startswith("SUP") and not extra_arff(args.extra_data, d)})
+    if args.plan and unsupplied:
+        log(f"Not in the authors' repo, skipped until supplied as {args.extra_data}/<name>.arff: "
+            f"{', '.join(unsupplied)}")
     every = {d for c, _ in configs.values() for d in c["datasets"]}
     every_method = {entry[0] for c, _ in configs.values() for entry in c["learners"]}
     if set(args.datasets or []) - every:
@@ -432,7 +456,7 @@ def main(argv=None):
     with open("/proc/cpuinfo") as info:
         args.cpu_model = next((line.split(":", 1)[1].strip() for line in info if line.startswith("model name")), None)
     jar_sha = hashlib.sha256(args.jar.read_bytes()).hexdigest()
-    data = DataCache(args.upstream, args.data_cache)
+    data = DataCache(args.upstream, args.data_cache, args.extra_data)
 
     def run(cell):
         return run_cell(cell, args, *configs[cell[0]], data, jar_sha)

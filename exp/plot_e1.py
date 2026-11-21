@@ -50,7 +50,8 @@ FIG_METHODS = [
     ("OzaReg", "Oza(FIRTDD)", "OzaReg"),
     ("ARFReg", "ARFReg(FIRTDD)", "ARFReg"),
 ]
-POST_HOC_DATASETS = DATASETS + ["SUP2I", "SUP3A", "SUP3G"]
+POST_HOC_DATASETS = DATASETS  # all 16; the authors' post_hoc_new has the SUP* sets too
+REPO_DATASETS = [d for d in DATASETS if not d.startswith("SUP")]  # ARFFs shipped in the authors' repo
 R2 = "adjusted coefficient of determination"
 WALL = "evaluation time (wall) (seconds)"
 
@@ -179,7 +180,8 @@ def load_runs(results):
 
 
 def blocks_from_runs(runs, metric, per_dataset):
-    keys = sorted({(d, s) for (_, d, s) in runs})
+    # The six methods of Figs. 4-5 are all seeded; unseeded runs (seed None) never form a block.
+    keys = sorted({(d, s) for (_, d, s) in runs if s is not None})
     rows = {}
     for dataset, seed in keys:
         found = [runs.get((key, dataset, seed)) for _, key, _ in FIG_METHODS]
@@ -302,10 +304,13 @@ def draw_delta_heatmap(r2, path):
     if not methods:
         return False
     keys = {paper: key for paper, key, _ in METHODS}
+    # The shipped datasets always get a column; SUP* only once supplied and run.
+    columns = [d for d in DATASETS if d in REPO_DATASETS or any((keys[m], d) in r2 for m in methods)]
     grid, notes = [], []
     for m in methods:
         row, text = [], []
-        for i, d in enumerate(DATASETS):
+        for d in columns:
+            i = DATASETS.index(d)
             ours = r2.get((keys[m], d))
             if ours is None or (m == "Axgb" and d == "NZEnergy"):
                 row.append(math.nan)
@@ -324,12 +329,12 @@ def draw_delta_heatmap(r2, path):
             value = grid[r][c]
             dark = not math.isnan(value) and abs(value) > 0.06
             ax.text(c, r, t, ha="center", va="center", fontsize=7.5, color=SURFACE if dark else INK_2)
-    ax.set_xticks(range(len(DATASETS)), SHORT, rotation=35, ha="right")
+    ax.set_xticks(range(len(columns)), [SHORT[DATASETS.index(d)] for d in columns], rotation=35, ha="right")
     ax.set_yticks(range(len(methods)), methods)
     ax.tick_params(length=0)
     for spine in ax.spines.values():
         spine.set_visible(False)
-    ax.set_xticks([x - 0.5 for x in range(1, len(DATASETS))], minor=True)
+    ax.set_xticks([x - 0.5 for x in range(1, len(columns))], minor=True)
     ax.set_yticks([y - 0.5 for y in range(1, len(methods))], minor=True)
     ax.grid(which="minor", color=SURFACE, lw=2)
     ax.tick_params(which="minor", length=0)
@@ -470,7 +475,7 @@ def main(argv=None):
             upstream = Path(json.loads(args.toolchain.read_text())["upstream"])
         if upstream is None:
             parser.error("Run exp/toolchain.py first, or pass --upstream")
-        datasets = POST_HOC_DATASETS if args.post_hoc_datasets == "all" else DATASETS
+        datasets = POST_HOC_DATASETS if args.post_hoc_datasets == "all" else REPO_DATASETS
         blocks_r2, found = blocks_from_post_hoc(upstream, R2, datasets, per_dataset)
         blocks_wall, _ = blocks_from_post_hoc(upstream, WALL, datasets, per_dataset)
         report = posthoc_figures(blocks_r2, blocks_wall, found, "_authors", args.alpha, out, unit)

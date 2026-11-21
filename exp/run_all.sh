@@ -12,6 +12,8 @@
 #   pack     results/ and logs/ into sgbr_results_<date>.tgz, to copy off the machine
 #
 # Every step resumes: after an interruption, run the same command again.
+# Datasets missing from the authors' repository (SUP*.arff for E1, Friedman*_1.._12 for E3) are added
+# when copied into extra_data/; rerun "moa e3 figures" and only the new runs are done.
 #
 # Settings (environment variables, all optional)
 #   JOBS         parallel runs                       default: number of vCPUs

@@ -15,7 +15,8 @@ pinned commit:
   mlxtend.evaluate.bias_variance_decomp(loss="mse", num_rounds=10, random_seed=42) trains a new
   model on each of 10 bootstrap samples of the training fold and predicts the test fold.
 - FriedmanGra/Gsg/FriedmanLea: train on <name>_1 ... <name>_10, test on <name>_12. These split files
-  are not in the authors' repository; pass --split-dir if you have them.
+  are not in the authors' repository. Put them in extra_data/ (or --split-dir) and each dataset whose
+  11 files are all there is run too.
 - Expected loss, bias and variance are averaged over the 10 folds (or splits), and the square roots
   of the mean bias and mean variance are reported.
 
@@ -266,9 +267,10 @@ def main(argv=None):
     parser.add_argument("--toolchain", type=Path, default=Path.home() / "sgbr" / "toolchain.json")
     parser.add_argument("--results", type=Path, default=Path("results"))
     parser.add_argument("--data-cache", type=Path, help="Default: data/ next to the toolchain file")
-    parser.add_argument("--datasets", nargs="+", default=STATIC, choices=STATIC + DRIFT,
-                        help="Default: the 7 datasets without drift (the Friedman* split files are not shipped)")
-    parser.add_argument("--split-dir", type=Path,
+    parser.add_argument("--datasets", nargs="+", choices=STATIC + DRIFT,
+                        help="Default: the 7 datasets without drift, plus each Friedman* dataset whose split "
+                             "files are all in --split-dir")
+    parser.add_argument("--split-dir", type=Path, default=Path("extra_data"),
                         help="Folder with FriedmanGra_1 ... FriedmanGra_10 and FriedmanGra_12 (likewise Gsg, Lea)")
     parser.add_argument("--methods", nargs="+", default=list(METHODS), choices=list(METHODS))
     parser.add_argument("--iterations", nargs="+", type=int, default=ITERATIONS)
@@ -279,6 +281,15 @@ def main(argv=None):
     parser.add_argument("--summary-only", action="store_true")
     args = parser.parse_args(argv)
 
+    def split_files(dataset):
+        return [args.split_dir / f"{dataset}_{i}" for i in list(range(1, FOLDS + 1)) + [12]]
+
+    if args.datasets is None:
+        supplied = [d for d in DRIFT if all(p.is_file() for p in split_files(d))]
+        args.datasets = STATIC + supplied
+        missing = [d for d in DRIFT if d not in supplied]
+        if missing:
+            log(f"Split files not found in {args.split_dir}/, skipped: {', '.join(missing)}")
     tools = json.loads(args.toolchain.read_text())
     upstream, jar = Path(tools["upstream"]), Path(tools["jar"])
     data_cache = args.data_cache or args.toolchain.parent / "data"
@@ -291,10 +302,7 @@ def main(argv=None):
     sources = {}
     for dataset in args.datasets:
         if dataset in DRIFT:
-            if args.split_dir is None:
-                parser.error(f"{dataset} needs --split-dir with {dataset}_1 ... {dataset}_10 and {dataset}_12")
-            train = [args.split_dir / f"{dataset}_{i}" for i in range(1, FOLDS + 1)]
-            test = args.split_dir / f"{dataset}_12"
+            *train, test = split_files(dataset)
             missing = [str(p) for p in train + [test] if not p.is_file()]
             if missing:
                 parser.error(f"Missing split files: {missing[:3]}")
