@@ -41,10 +41,12 @@ results/
 
 ## Running everything on one machine
 
-Requirements: Linux x86_64 with root or sudo (a rented VM such as vast.ai is fine), `git`,
-`python3` with `venv`, internet access, and about 10 GB of free disk under `~/sgbr`. More cores make
-it faster. RAM needs to cover the parallel runs: most take 1-6 GB, and two NZEnergy runs of E1 need
-26 GB each. A 16 vCPU / 64 GB machine or larger is a good fit.
+Requirements: Linux x86_64 with root or sudo (a rented VM or container such as vast.ai is fine),
+`git`, `python3` with `venv`, internet access, and at least 20 GB of free disk (toolchain, data and
+Python packages take about 1.5 GB; results and logs up to a few GB). More cores make it faster. RAM
+needs to cover the parallel runs: most take 1-6 GB, and two NZEnergy runs of E1 need 26 GB each. A
+16 vCPU / 64 GB machine or larger is a good fit. On vast.ai, rent an on-demand (not interruptible)
+instance with 30 GB of disk or more.
 
 ```bash
 apt-get update && apt-get install -y git python3-venv tmux     # once, on a fresh machine
@@ -54,8 +56,13 @@ tmux new -s sgbr                    # keeps running if SSH drops; reattach with:
 bash exp/run_all.sh                 # setup, E1 E2 E4 E5, E3, figures, archive
 ```
 
-Follow progress from another shell with `tail -f logs/moa.log` or `tail -f logs/e3.log`. When it
-finishes, copy the archive to your own computer before destroying the machine:
+The first lines printed show `JOBS` and `RAM_GB`. In a container they are read from its CPU and
+memory limits; if they do not match what you rented, stop with Ctrl-C and set them (see below).
+
+Follow progress from another shell with `tail -f logs/moa.log` or `tail -f logs/e3.log`, and count
+finished runs with `grep -c completed logs/moa.log`. `bash exp/run_all.sh figures pack` at any time
+draws what has finished and makes an archive. When it finishes, copy the archive to your own
+computer before destroying the machine:
 
 ```bash
 scp -P <port> root@<host>:SGBR-Streaming-Regression/sgbr_results_*.tgz .
@@ -80,8 +87,8 @@ Settings are environment variables, for example `JOBS=12 RAM_GB=100 bash exp/run
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `JOBS` | number of vCPUs | parallel runs (each MOA run uses one core) |
-| `RAM_GB` | total RAM − 10 GB | memory the parallel runs may reserve; a run starts only if 1.15 × its heap + 256 MiB still fits |
+| `JOBS` | number of vCPUs (the container's CPU limit, if lower) | parallel runs (each MOA run uses one core) |
+| `RAM_GB` | RAM (the container's memory limit, if lower) − 10 GB | memory the parallel runs may reserve; a run starts only if 1.15 × its heap + 256 MiB still fits |
 | `EXPERIMENTS` | `E1 E2 E4 E5` | MOA experiments for the `moa` step |
 | `MOA_XMX` | `default=6g,NZEnergy:SGBT(SRP(FIRTDD))=26g,NZEnergy:SRP(SGBT(FIRTDD))=26g` | heap per run: a default, then `<dataset>=` or `<dataset>:<method>=` overrides |
 | `RETRY_XMX` | `12g` | heap for a second try of any run that ran out of memory |

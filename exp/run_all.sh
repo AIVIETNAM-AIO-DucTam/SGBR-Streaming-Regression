@@ -25,8 +25,40 @@ cd "$(dirname "$0")/.."
 
 VENV=$HOME/sgbr/venv
 PY=$VENV/bin/python
-JOBS=${JOBS:-$(nproc)}
-RAM_GB=${RAM_GB:-$(awk '/MemTotal/ {print int($2 / 1048576) - 10}' /proc/meminfo)}
+
+# In a container (vast.ai, Docker) nproc and /proc/meminfo can show the whole host, not the share
+# that was rented. Use the container's cgroup limits when they are smaller.
+cpu_count() {
+  local cpus quota period
+  cpus=$(nproc)
+  if [ -r /sys/fs/cgroup/cpu.max ]; then
+    read -r quota period < /sys/fs/cgroup/cpu.max
+  elif [ -r /sys/fs/cgroup/cpu/cpu.cfs_quota_us ]; then
+    quota=$(cat /sys/fs/cgroup/cpu/cpu.cfs_quota_us)
+    period=$(cat /sys/fs/cgroup/cpu/cpu.cfs_period_us)
+  fi
+  if [[ ${quota:-max} =~ ^[0-9]+$ ]] && [ "$quota" -gt 0 ] && [ $(( quota / period )) -lt "$cpus" ]; then
+    cpus=$(( quota / period > 0 ? quota / period : 1 ))
+  fi
+  echo "$cpus"
+}
+
+memory_gb() {
+  local total limit=""
+  total=$(awk '/MemTotal/ {print int($2 / 1048576)}' /proc/meminfo)
+  if [ -r /sys/fs/cgroup/memory.max ]; then
+    limit=$(cat /sys/fs/cgroup/memory.max)
+  elif [ -r /sys/fs/cgroup/memory/memory.limit_in_bytes ]; then
+    limit=$(cat /sys/fs/cgroup/memory/memory.limit_in_bytes)
+  fi
+  if [[ $limit =~ ^[0-9]+$ ]] && [ $(( limit / 1073741824 )) -lt "$total" ]; then
+    total=$(( limit / 1073741824 ))
+  fi
+  echo "$total"
+}
+
+JOBS=${JOBS:-$(cpu_count)}
+RAM_GB=${RAM_GB:-$(( $(memory_gb) - 10 ))}
 EXPERIMENTS=${EXPERIMENTS:-"E1 E2 E4 E5"}
 MOA_XMX=${MOA_XMX:-"default=6g,NZEnergy:SGBT(SRP(FIRTDD))=26g,NZEnergy:SRP(SGBT(FIRTDD))=26g"}
 RETRY_XMX=${RETRY_XMX:-12g}
@@ -85,6 +117,13 @@ step_pack() {
 }
 
 say "settings: JOBS=$JOBS RAM_GB=$RAM_GB EXPERIMENTS=\"$EXPERIMENTS\" E3_JOBS=$E3_JOBS steps: ${STEPS[*]}"
+echo "Check that JOBS and RAM_GB match the machine you rented; if not, stop (Ctrl-C) and set them, e.g."
+echo "  JOBS=16 RAM_GB=150 bash exp/run_all.sh"
+mkdir -p "$HOME/sgbr"
+FREE_GB=$(df -Pk "$HOME/sgbr" . | awk 'NR > 1 {gb = int($4 / 1048576); if (min == "" || gb < min) min = gb} END {print min}')
+if [ "$FREE_GB" -lt 20 ]; then
+  echo "WARNING: only ${FREE_GB} GB free disk; about 20 GB is needed (toolchain, data, Python packages, results)."
+fi
 for step in "${STEPS[@]}"; do
   case $step in
     setup|moa|e3|figures|pack) say "step $step"; "step_$step" ;;
