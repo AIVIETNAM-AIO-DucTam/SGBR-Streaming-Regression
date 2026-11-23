@@ -193,7 +193,7 @@ follows the same protocol with the same MOA jar, driven through JPype:
 | Maximum heap | `-Xmx48g` (E1) or `-Xmx12g` (E2, E4, E5) for every run | Per run (`MOA_XMX`, recorded in each `record.json`); runs that run out of memory are retried with `RETRY_XMX`. The heap does not change results |
 | Datasets (E1) | 16, including SUP2I, SUP3A, SUP3G | 13. The SUP\* ARFF files are not in the authors' repository; each one put in `extra_data/` is added |
 | AXGBr (E1) | All datasets | 10 smaller datasets; NZEnergy alone takes about 1.3e5 s in Tab. 4 |
-| JVM flags | as configured | plus `-XX:+ExitOnOutOfMemoryError` so an out-of-memory run stops at once |
+| JVM flags | as configured | plus `-XX:+ExitOnOutOfMemoryError` so an out-of-memory run stops at once, and `-XX:ParallelGCThreads=2 -XX:ConcGCThreads=1` (also for E3). With the default, each JVM started about 20 garbage-collector threads on a 30-CPU machine, and 16 parallel runs spent most of the CPU in them. The GC does not change results; runs made before this change (first vast.ai run, 2026-11) have inflated wall times |
 | Java | not specified in the config | Temurin JDK 11.0.29 (MEKA 1.9.7 in the MOA fork needs Java 11) |
 | E3 wrapper | CapyMOA with its `moa.jar` replaced by theirs | JPype calling the same jar directly, same steps; results match theirs |
 | E3 datasets | 10, including 3 drifting Friedman sets from split files | 7; the split files are not in their repository (added from `extra_data/` when supplied; until then Fig. 7 shows the authors' results for them, marked) |

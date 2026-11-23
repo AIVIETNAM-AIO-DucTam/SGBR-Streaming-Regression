@@ -86,7 +86,10 @@ def start_jvm(java, jar, xmx):
     """Start the JDK 11 that exp/toolchain.py selected (java = <home>/bin/java)."""
     import jpype
     libjvm = Path(java).resolve().parent.parent / "lib" / "server" / "libjvm.so"
-    jpype.startJVM(str(libjvm), f"-Xmx{xmx}", "-Xss10m", classpath=[str(jar)], convertStrings=False)
+    # Two garbage-collector threads per worker JVM instead of about 20 on a 30-CPU machine: with 16
+    # workers the default threads took most of the CPU. The GC does not change any result.
+    jpype.startJVM(str(libjvm), f"-Xmx{xmx}", "-Xss10m", "-XX:ParallelGCThreads=2", "-XX:ConcGCThreads=1",
+                   classpath=[str(jar)], convertStrings=False)
     import jpype.imports  # noqa: F401  (enables "from com.yahoo... import ...")
 
 

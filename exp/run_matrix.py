@@ -54,6 +54,7 @@ SEEN = "learning evaluation instances"
 JAVA_OPTION_VARIABLES = {"JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "_JAVA_OPTIONS"}
 OOM_PATTERN = re.compile(rb"OutOfMemoryError|Native memory allocation.*failed|There is insufficient memory",
                          re.IGNORECASE)
+GC_THREADS = ["-XX:ParallelGCThreads=2", "-XX:ConcGCThreads=1"]
 PROGRESS_PERCENT = re.compile(rb"(?<![\d.])(\d{1,3}(?:\.\d+)?)%")
 # Resident memory of a JVM exceeds -Xmx (metaspace, thread stacks, GC structures). Observed: 6.83 GB
 # RSS at -Xmx6g. The scheduler reserves this much per cell.
@@ -122,7 +123,10 @@ def build_command(config, learner, seed_flag, seed, java, jar, xmx, exit_on_oom=
         # Stop the JVM at the first OutOfMemoryError instead of letting MOA catch it and keep
         # thrashing the garbage collector for hours.
         jvm.insert(heap[0] + 1, "-XX:+ExitOnOutOfMemoryError")
-    task = f'{config["evaluator"]} -s (ArffFileStream -f stream.arff) -l ({learner}) -d evaluation.csv'
+    # By default each JVM starts about 20 garbage-collector threads on a 30-CPU machine; with 16 JVMs
+    # those threads took most of the CPU and starved the single-threaded learners. Two are enough.
+    jvm[heap[0] + 1:heap[0] + 1] = GC_THREADS
+    task =f'{config["evaluator"]} -s (ArffFileStream -f stream.arff) -l ({learner}) -d evaluation.csv'
     return [str(java), "-classpath", str(jar), *jvm, task], paper_xmx
 
 
@@ -130,11 +134,13 @@ def run_identity(command):
     """The part of a command that defines the run: JVM options and the MOA task.
 
     The java and jar paths are left out, and so is the jar digest (recorded per cell): Maven builds of
-    the same pinned source are not byte-reproducible. The heap size and the OOM flag only decide
-    whether a run fits in memory, not its result, so they are left out too (the heap is recorded).
+    the same pinned source are not byte-reproducible. The heap size, the OOM flag and the number of
+    garbage-collector threads only decide whether and how fast a run fits in memory, not its result,
+    so they are left out too (the full command is recorded).
     """
     return [part for part in command[3:]
-            if part != "-XX:+ExitOnOutOfMemoryError" and not part.startswith("-Xmx")]
+            if part != "-XX:+ExitOnOutOfMemoryError" and not part.startswith("-Xmx")
+            and part not in GC_THREADS]
 
 
 def final_row(csv_path):
