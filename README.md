@@ -117,7 +117,16 @@ machine (file names in `extra_data/README.md`) and run
 bash exp/run_all.sh moa e3 figures pack
 ```
 
-Only the runs that use the new files are added; everything finished is skipped. Until then, the
+Only the runs that use the new files are added; everything finished is skipped. The SUP files have
+81-82 attributes, so their ensembles need more memory than the 6 GB default (a single Hoeffding tree
+on SUP3G already grew to 5.6 GB); give them a larger heap and a larger retry heap:
+
+```bash
+MOA_XMX="default=6g,NZEnergy:SGBT(SRP(FIRTDD))=26g,NZEnergy:SRP(SGBT(FIRTDD))=26g,SUP2I=12g,SUP3A=16g,SUP3G=16g" \
+  RETRY_XMX=32g bash exp/run_all.sh moa figures pack
+```
+
+The 156 SUP cells take about 91 CPU-hours at the paper's speed (SUP2I 14, SUP3A 39, SUP3G 38). Until then, the
 E1 tables and figures cover the 13 shipped datasets, and Fig. 7 shows the three Friedman panels
 from the authors' committed results on a shaded background labelled "authors' results, not
 reproduced".
