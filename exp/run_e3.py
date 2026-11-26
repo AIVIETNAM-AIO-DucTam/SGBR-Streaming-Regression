@@ -282,6 +282,8 @@ def main(argv=None):
     parser.add_argument("--jobs", type=int, default=1, help="Parallel worker processes, one JVM each")
     parser.add_argument("--xmx", default="4g", help="Heap per worker JVM")
     parser.add_argument("--summary-only", action="store_true")
+    parser.add_argument("--status", action="store_true",
+                        help="Print how many tasks are finished in --results per dataset and method, then exit")
     args = parser.parse_args(argv)
 
     def split_files(dataset):
@@ -328,6 +330,16 @@ def main(argv=None):
                 skipped += 1
                 continue
         tasks.append(task)
+    if args.status:
+        left = {}
+        for task in tasks:
+            left[(task["dataset"], task["method"])] = left.get((task["dataset"], task["method"]), 0) + 1
+        per_pair = len(args.iterations) * len(args.folds)
+        print(f"E3: {skipped + len(tasks)} tasks, done {skipped}, not done {len(tasks)}")
+        for dataset in args.datasets:
+            print(f"  {dataset:14s} " + "  ".join(f"{m} {per_pair - left.get((dataset, m), 0)}/{per_pair}"
+                                                  for m in args.methods))
+        return 0
     log(f"{len(tasks)} tasks to run, {skipped} already done, {args.jobs} workers, -Xmx{args.xmx} each")
 
     import mlxtend

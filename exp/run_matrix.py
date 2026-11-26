@@ -143,6 +143,40 @@ def run_identity(command):
             and part not in GC_THREADS]
 
 
+def reusable(record, identity, dataset_sha, config_hash):
+    """A completed run of the same MOA task, data and config, even if it ran with another heap or from
+    other java/jar paths (for example on another machine, from an unpacked sgbr_results_*.tgz)."""
+    return (record.get("status") == "completed" and run_identity(record.get("command", [])) == identity
+            and record.get("dataset_sha256") == dataset_sha and record.get("config_sha256") == config_hash)
+
+
+def report_status(cells, args, configs, data):
+    """Print which cells are finished and which a rerun would still do, without running anything."""
+    states, totals = {}, {}
+    for cell in cells:
+        exp, dataset, method, seed_flag, learner, seed = cell
+        config, config_hash = configs[exp]
+        path = cell_folder(args.results, cell) / "record.json"
+        record = json.loads(path.read_text()) if path.is_file() else {}
+        command, _ = build_command(config, learner, seed_flag, seed, args.java, args.jar, heap_for(args, cell))
+        if reusable(record, run_identity(command), data.get(dataset)[1]["sha256"], config_hash):
+            state = "done"
+        elif record.get("status") == "completed":
+            state = "outdated"  # finished, but with another command, dataset file or config
+        else:
+            state = record.get("status") or "not run"
+        totals.setdefault(exp, {}).setdefault(state, 0)
+        totals[exp][state] += 1
+        if state != "done":
+            states.setdefault((exp, dataset, method, state), []).append("-" if seed is None else str(seed))
+    for exp, counts in totals.items():
+        print(f"{exp}: {sum(counts.values())} cells, " + ", ".join(f"{k} {v}" for k, v in sorted(counts.items())))
+    if states:
+        print("Not done (a rerun of the same command does these):")
+        for (exp, dataset, method, state), seeds in sorted(states.items()):
+            print(f"  {exp} {dataset:14s} {method:24s} {state:8s} seeds {','.join(seeds)}")
+
+
 def final_row(csv_path):
     if not csv_path.is_file():
         return None
@@ -248,10 +282,7 @@ def run_cell(cell, args, config, config_hash, data, jar_sha):
     command_hash = hashlib.sha256(json.dumps([identity, evidence["sha256"], config_hash]).encode()).hexdigest()
     if record_path.is_file():
         old = json.loads(record_path.read_text())
-        # Reuse a completed run of the same MOA task, heap, data and config, even if it ran from
-        # other java/jar paths (for example on another machine).
-        if (old.get("status") == "completed" and run_identity(old.get("command", [])) == identity
-                and old.get("dataset_sha256") == evidence["sha256"] and old.get("config_sha256") == config_hash):
+        if reusable(old, identity, evidence["sha256"], config_hash):
             return old, True
     folder.mkdir(parents=True, exist_ok=True)
     for name in ("evaluation.csv", "java.log", "stream.arff"):
@@ -393,6 +424,8 @@ def main(argv=None):
     parser.add_argument("--retry-oom", metavar="SIZE",
                         help="Run cells that ran out of memory (now or in an earlier run) again with this heap")
     parser.add_argument("--list", action="store_true", help="Print the cells and exit without running")
+    parser.add_argument("--status", action="store_true",
+                        help="Print which cells are finished in --results and which are not, then exit")
     args = parser.parse_args(argv)
 
     if args.toolchain.is_file():
@@ -458,11 +491,14 @@ def main(argv=None):
             print(f"{c[0]} {c[1]:14s} {c[2]:24s} seed={c[5]}  -Xmx{heap_for(args, c)}  "
                   f"≈{estimated_seconds(c[2], c[1]):.0f} s")
         return 0
+    data = DataCache(args.upstream, args.data_cache, args.extra_data)
+    if args.status:
+        report_status(cells, args, configs, data)
+        return 0
 
     with open("/proc/cpuinfo") as info:
         args.cpu_model = next((line.split(":", 1)[1].strip() for line in info if line.startswith("model name")), None)
     jar_sha = hashlib.sha256(args.jar.read_bytes()).hexdigest()
-    data = DataCache(args.upstream, args.data_cache, args.extra_data)
 
     def run(cell):
         return run_cell(cell, args, *configs[cell[0]], data, jar_sha)

@@ -79,10 +79,28 @@ scp -P <port> root@<host>:SGBR-Streaming-Regression/sgbr_results_*.tgz .
 | `e3` | E3 on the 7 datasets that can be rerun |
 | `figures` | All tables in `results/summary/` and all figures in `results/figures/` |
 | `pack` | `results/` and `logs/` into `sgbr_results_<date>.tgz` |
+| `status` | Runs nothing; lists per experiment how many runs are finished and which are not |
 
 Every step resumes. After an interruption or a reboot, run the same command again: finished runs
 are skipped, including runs copied in from another machine into `results/raw/`. A run that was in
 progress starts again from the beginning, because MOA cannot resume a run.
+
+### Continuing later on another machine
+
+A run is reused when its MOA command (without heap and GC flags), dataset file and config are the
+same, wherever it ran. To continue from an archive made by `pack`:
+
+```bash
+git clone https://github.com/AIVIETNAM-AIO-DucTam/SGBR-Streaming-Regression.git
+cd SGBR-Streaming-Regression
+bash exp/run_all.sh setup
+tar xzf /path/to/sgbr_results_<date>.tgz      # restores results/ and logs/
+bash exp/run_all.sh status                     # what is finished, what is left
+```
+
+Then run only the part you want, for example `RETRY_XMX=32g bash exp/run_all.sh moa figures pack` for
+MOA runs that ran out of memory, `bash exp/run_all.sh e3 figures pack` for E3, or the SUP command
+below once the SUP files are in `extra_data/`.
 
 Settings are environment variables, for example `JOBS=12 RAM_GB=100 bash exp/run_all.sh`:
 
@@ -98,13 +116,13 @@ Settings are environment variables, for example `JOBS=12 RAM_GB=100 bash exp/run
 The two NZEnergy runs get 26 GB because at 6 GB SGBT(SRP(FIRTDD)) ran out of memory and
 SRP(SGBT(FIRTDD)) had not finished after 11 hours.
 
-Rough time on 16 vCPUs, extrapolated from the paper's run times and our test runs (not measured end
-to end yet):
+Time needed. The first estimates (15-20 h for `moa`, 6-16 h for E3) were far too low. Measured on a
+shared 30-vCPU vast.ai instance (AMD EPYC 7282), 2026-11:
 
-| Part | CPU-hours at the paper's speed | Wall time on 16 vCPUs |
+| Part | CPU-hours at the paper's speed | What we measured |
 |---|---|---|
-| E1 + E2 + E4 + E5 (`moa`) | about 168 | about 15-20 h; the longest single run (NZEnergy SGBT(SRP)) alone takes 6-10 h |
-| E3 (`e3`) | about 100-250 (from abalone timings) | about 6-16 h |
+| E1 + E2 + E4 + E5 (`moa`, 13 datasets) | about 168 | more than 2 days of wall time; E1 mean wall times were 1.4-9.3 times the paper's Tab. 4 (shared host, GC contention before commit 816f9b7) |
+| E3 (`e3`) | not given in the paper | one fried BagB task (b = 85, one fold) took about 13,500 s; after 124 of 4,200 tasks the rest was estimated at 970-2,060 CPU-hours, so E3 was stopped |
 
 ### Adding the missing datasets later
 
@@ -118,15 +136,26 @@ bash exp/run_all.sh moa e3 figures pack
 ```
 
 Only the runs that use the new files are added; everything finished is skipped. The SUP files have
-81-82 attributes, so their ensembles need more memory than the 6 GB default (a single Hoeffding tree
-on SUP3G already grew to 5.6 GB); give them a larger heap and a larger retry heap:
+81-82 attributes, so their ensembles need much more memory than the 6 GB default (a single Hoeffding
+tree on SUP3G already grew to 5.6 GB). What we saw with 12 GB (SUP2I) and 16 GB (SUP3A, SUP3G):
+
+- SUP2I SRP(SGBT(FIRTDD)) finished at `-Xmx12g` in about 12,000 s per seed (peak RSS 13.7-16.8 GiB).
+- SUP3A Oza(SGBT(FIRTDD)) seed 2 ran out of memory at `-Xmx16g` after more than 80% of the stream.
+- SUP3A and SUP3G SRP(SGBT(FIRTDD)) at `-Xmx16g` were at 89-96% after about 13 hours, with most CPU
+  time in the garbage collector, when the run was stopped.
+
+So give the nested ensembles and SOKNL 24-32 GB and retry at the paper's 48 GB (not yet tested):
 
 ```bash
-MOA_XMX="default=6g,NZEnergy:SGBT(SRP(FIRTDD))=26g,NZEnergy:SRP(SGBT(FIRTDD))=26g,SUP2I=12g,SUP3A=16g,SUP3G=16g" \
-  RETRY_XMX=32g bash exp/run_all.sh moa figures pack
+X="default=6g,NZEnergy:SGBT(SRP(FIRTDD))=26g,NZEnergy:SRP(SGBT(FIRTDD))=26g,SUP2I=12g,SUP3A=16g,SUP3G=16g"
+for d in SUP2I SUP3A SUP3G; do h=32g; [ $d = SUP2I ] && h=24g
+  for m in "Oza(SGBT(FIRTDD))" "SRP(SGBT(FIRTDD))" "SGBT(Oza(FIRTDD))" "SGBT(ARFReg(FIRTDD))" \
+           "SGBT(SRP(FIRTDD))" "SOKNL(FIRTDD)"; do X="$X,$d:$m=$h"; done; done
+MOA_XMX="$X" RETRY_XMX=48g bash exp/run_all.sh moa figures pack
 ```
 
-The 156 SUP cells take about 91 CPU-hours at the paper's speed (SUP2I 14, SUP3A 39, SUP3G 38). Until then, the
+The 156 SUP cells take about 91 CPU-hours at the paper's speed (SUP2I 14, SUP3A 39, SUP3G 38); expect
+several times that, and only about 6 nested-ensemble runs at a time on 240 GB of RAM. Until then, the
 E1 tables and figures cover the 13 shipped datasets, and Fig. 7 shows the three Friedman panels
 from the authors' committed results on a shaded background labelled "authors' results, not
 reproduced".
@@ -209,7 +238,22 @@ follows the same protocol with the same MOA jar, driven through JPype:
 
 The learner strings, evaluators, seeds and the remaining JVM options are unchanged.
 
-## Results so far
+## Status of the first full run (vast.ai, 2026-11)
+
+Archive `sgbr_results_20261125_1805.tgz` (not committed; `bash exp/run_all.sh status` on it gives the
+counts below).
+
+| Part | Done | Not done | Result |
+|---|---|---|---|
+| E1, 13 shipped datasets | 686 of 686 runs | — | Mean R̄² matches paper Tab. 3 in all 166 cells (13 methods × 13 datasets, AXGBr on 10). Per-seed R̄² of the 6 methods of Figs. 4-5 equals the authors' post-hoc results in all 390 runs (max \|ΔR̄²\| = 0). Mean wall times are 1.4-9.3 × the paper's Tab. 4 (AXGBr, multithreaded on a shared host, 9-147 ×); compare wall-time ranks (Fig. 5), not seconds |
+| E1, SUP2I / SUP3A / SUP3G | 0 of 156 runs in the archive | 156 | Files received from the authors and checked (row and attribute counts as Tab. 2; FIRT-DD and HTR R̄² as Tab. 3). Stopped for lack of compute; before that, SUP2I SRP(SGBT(FIRTDD)) seeds 1 and 3 gave R̄² 0.567 and 0.566 (Tab. 3: 0.57) |
+| E2 (hyperA, Fig. 6) | 9 of 12 runs | SOKNL seeds 1-3 | SOKNL ran out of memory at `-Xmx12g` (the authors' E2 heap) after about 60%; not retried. Fig. 6 has ArfReg, OzaReg, Sgb(Oza) |
+| E3 (Figs. 2, 7, 8) | 124 of 4,200 tasks | 4,076 | Stopped (see the time table above). The 11 complete points (BagB on fried and MetroTraffic) match the authors' values to 9.3e-10; abalone at 5 and 10 iterations to 2e-15. Figs. 7-8 show the authors' committed curves |
+| E3, 3 drifting Friedman sets | — | all | Split files not in the authors' repository |
+| E4 (Fig. 9) | 495 of 495 runs | — | 9 configurations × 11 datasets |
+| E5 (Tabs. 5-6, Fig. 10) | 495 of 495 runs | — | 9 configurations × 11 datasets |
+
+Earlier checks:
 
 - `results/summary/B1_parity.csv`: NZEnergy, SGBT(ARFReg(FIRTDD)), seed 1 (3,100,666 instances)
   reproduces the authors' final R̄² exactly (0.9741708731300197, Δ = 0) on an AMD EPYC 7B12.

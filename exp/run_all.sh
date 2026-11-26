@@ -10,8 +10,10 @@
 #   e3       E3 bias-variance decomposition (exp/run_e3.py)
 #   figures  tables in results/summary/ and PNG figures in results/figures/ for whatever has finished
 #   pack     results/ and logs/ into sgbr_results_<date>.tgz, to copy off the machine
+#   status   what is finished in results/ and what a rerun would still do (runs nothing)
 #
-# Every step resumes: after an interruption, run the same command again.
+# Every step resumes: after an interruption, run the same command again. On a new machine, unpack an
+# earlier sgbr_results_<date>.tgz in the repository folder after "setup"; finished runs are reused.
 # Datasets missing from the authors' repository (SUP*.arff for E1, Friedman*_1.._12 for E3) are added
 # when copied into extra_data/; rerun "moa e3 figures" and only the new runs are done.
 #
@@ -112,6 +114,13 @@ step_figures() {
   "$PY" exp/plot_e3.py --source authors || STATUS=1   # the authors' own E3 curves, for comparison
 }
 
+step_status() {
+  need_venv
+  # shellcheck disable=SC2086  # EXPERIMENTS is a list
+  "$PY" exp/run_matrix.py --exp $EXPERIMENTS --plan repro --xmx "$MOA_XMX" --status || STATUS=1
+  "$PY" exp/run_e3.py --status || STATUS=1
+}
+
 step_pack() {
   local archive
   archive="sgbr_results_$(date +%Y%m%d_%H%M).tgz"
@@ -128,8 +137,8 @@ if [ "$FREE_GB" -lt 20 ]; then
 fi
 for step in "${STEPS[@]}"; do
   case $step in
-    setup|moa|e3|figures|pack) say "step $step"; "step_$step" ;;
-    *) echo "Unknown step '$step' (use: setup moa e3 figures pack)"; exit 2 ;;
+    setup|moa|e3|figures|pack|status) say "step $step"; "step_$step" ;;
+    *) echo "Unknown step '$step' (use: setup moa e3 figures pack status)"; exit 2 ;;
   esac
 done
 if [ $STATUS -ne 0 ]; then
