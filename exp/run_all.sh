@@ -8,7 +8,7 @@
 #   setup    JDK 11, Maven, the authors' MOA source and jar under ~/sgbr; Python venv ~/sgbr/venv
 #   moa      E1, E2, E4, E5 with the authors' MOA commands, in one shared queue (exp/run_matrix.py)
 #   e3       E3 bias-variance decomposition (exp/run_e3.py)
-#   figures  tables in results/summary/ and PNG figures in results/figures/ for whatever has finished
+#   figures  tables in results/summary/ and PNG figures in results/figures/ (deck copies in figures/deck/) for whatever has finished
 #   pack     results/ and logs/ into sgbr_results_<date>.tgz, to copy off the machine
 #   status   what is finished in results/ and what a rerun would still do (runs nothing)
 #
@@ -112,6 +112,7 @@ step_figures() {
     "$PY" exp/plot_e3.py --with-authors || STATUS=1
   fi
   "$PY" exp/plot_e3.py --source authors || STATUS=1   # the authors' own E3 curves, for comparison
+  "$PY" exp/plot_deck.py || STATUS=1                  # slide-sized copies in results/figures/deck/
 }
 
 step_status() {

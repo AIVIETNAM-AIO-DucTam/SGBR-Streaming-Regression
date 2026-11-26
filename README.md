@@ -32,12 +32,13 @@ exp/
   plot_e2.py       E2 figure (paper Fig. 6) and drift summary
   plot_e3.py       E3 figures (paper Figs. 2, 7, 8)
   plot_e4_e5.py    E4/E5 tables and figures (paper Fig. 9, Tabs. 5-6)
+  plot_deck.py     the same results as slide-sized figures for the team's deck (Vietnamese labels)
 requirements.txt   Python packages for E3 and the figures
 extra_data/        datasets not in the authors' repository, added when available (see below)
 results/
   raw/             one folder per run or task (not committed)
   summary/         tables (CSV and Markdown)
-  figures/         PNG figures
+  figures/         PNG figures; figures/deck/ for the slides
 ```
 
 ## Running everything on one machine
@@ -176,6 +177,7 @@ exp/run_matrix.py --exp E5 --datasets abalone --seeds 1 --jobs 4` runs one small
 | `figures/fig2_*.png`, `fig7_*.png`, `fig8_*.png` | Like paper Figs. 2, 7, 8; grey lines are the authors' curves. In Fig. 7, Friedman panels without runs of ours are shaded and drawn from the authors' results. `*_authors.png` are drawn from the authors' committed results only |
 | `summary/E4_table.md`, `E4_grid.csv`, `figures/fig9_lr_feature.png` | Like paper Fig. 9: average R̄² and wall time per (learning rate, feature %) |
 | `summary/E5_table.md`, `E5_grid.csv`, `figures/fig10_steps_bagsize.png` | Like paper Tabs. 5-6 and Fig. 10: R̄² and wall time per (boosting steps, bag size), with avg and avgRank |
+| `figures/deck/deck_*.png` | Slide-sized versions for the deck, in its colours with Vietnamese labels: Figs. 4-5 (paper above, ours below), the E1 Δ heatmap, Figs. 6, 9, 10 with the paper's values as rings, and wall time / Tab. 4. Drawn at the size they take on a 20 × 11.25 in slide, transparent background; Arial when available (WSL or msttcorefonts), else DejaVu Sans |
 
 The figures use the paper's layout, with two changes for readability: the paper's twin-axis plots
 (Figs. 9-10) are drawn as two panels sharing the x axis, and colours replace the paper's black line
